@@ -29,6 +29,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import { Device } from '@capacitor/device';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { cn } from './utils';
 
 // --- Types ---
@@ -46,8 +48,6 @@ interface AppInfo {
 interface BatteryStatus {
   level: number;
   charging: boolean;
-  chargingTime: number;
-  dischargingTime: number;
 }
 
 // --- Mock Data ---
@@ -126,24 +126,37 @@ const Dashboard = ({ onNavigate }: { onNavigate: (tab: Tab) => void }) => {
   const [isBoosting, setIsBoosting] = useState(false);
   const [battery, setBattery] = useState<BatteryStatus | null>(null);
   const [memory, setMemory] = useState<{ used: number; total: number } | null>(null);
+  const [cpuUsage, setCpuUsage] = useState(0);
 
   useEffect(() => {
-    // Real Battery Data
-    if ('getBattery' in navigator) {
-      (navigator as any).getBattery().then((batt: any) => {
-        const updateBattery = () => {
-          setBattery({
-            level: Math.round(batt.level * 100),
-            charging: batt.charging,
-            chargingTime: batt.chargingTime,
-            dischargingTime: batt.dischargingTime
+    // Real Battery Data using Capacitor Device Plugin
+    const fetchBattery = async () => {
+      try {
+        const info = await Device.getBatteryInfo();
+        setBattery({
+          level: Math.round((info.batteryLevel || 0) * 100),
+          charging: info.isCharging || false
+        });
+      } catch (e) {
+        // Fallback to web API
+        if ('getBattery' in navigator) {
+          (navigator as any).getBattery().then((batt: any) => {
+            const update = () => {
+              setBattery({
+                level: Math.round(batt.level * 100),
+                charging: batt.charging
+              });
+            };
+            update();
+            batt.addEventListener('levelchange', update);
+            batt.addEventListener('chargingchange', update);
           });
-        };
-        updateBattery();
-        batt.addEventListener('levelchange', updateBattery);
-        batt.addEventListener('chargingchange', updateBattery);
-      });
-    }
+        }
+      }
+    };
+
+    fetchBattery();
+    const batteryInterval = setInterval(fetchBattery, 10000);
 
     // Real Memory Data (Chrome only)
     const updateMemory = () => {
@@ -159,15 +172,34 @@ const Dashboard = ({ onNavigate }: { onNavigate: (tab: Tab) => void }) => {
       }
     };
     updateMemory();
-    const interval = setInterval(updateMemory, 5000);
-    return () => clearInterval(interval);
+    const memoryInterval = setInterval(updateMemory, 5000);
+
+    // Simulated CPU Usage (more realistic)
+    const updateCpu = () => {
+      setCpuUsage(Math.floor(Math.random() * 15) + 10); // Base usage 10-25%
+    };
+    updateCpu();
+    const cpuInterval = setInterval(updateCpu, 3000);
+
+    return () => {
+      clearInterval(batteryInterval);
+      clearInterval(memoryInterval);
+      clearInterval(cpuInterval);
+    };
   }, []);
 
-  const handleBoost = () => {
+  const handleBoost = async () => {
     setIsBoosting(true);
-    setTimeout(() => {
+    try {
+      await Haptics.impact({ style: ImpactStyle.Heavy });
+    } catch (e) {}
+    
+    setTimeout(async () => {
       setHealthScore(100);
       setIsBoosting(false);
+      try {
+        await Haptics.notification({ type: 'SUCCESS' as any });
+      } catch (e) {}
     }, 2000);
   };
 
@@ -249,7 +281,7 @@ const Dashboard = ({ onNavigate }: { onNavigate: (tab: Tab) => void }) => {
             </div>
             <div>
               <p className="font-display font-bold text-sm">CPU Cooler</p>
-              <p className="text-[10px] text-white/40 uppercase">38°C Normal</p>
+              <p className="text-[10px] text-white/40 uppercase">{cpuUsage + 20}°C Normal</p>
             </div>
           </Card>
           <Card className="flex items-center gap-4" onClick={() => onNavigate('network')}>
@@ -286,10 +318,14 @@ const JunkCleaner = () => {
     { name: 'Ad Junk', size: '0 MB', icon: AlertTriangle },
   ]);
 
-  const handleScan = () => {
+  const handleScan = async () => {
     setIsScanning(true);
     setJunkFound(null);
-    setTimeout(() => {
+    try {
+      await Haptics.impact({ style: ImpactStyle.Medium });
+    } catch (e) {}
+    
+    setTimeout(async () => {
       setIsScanning(false);
       setJunkFound(2.4);
       setCategories([
@@ -298,7 +334,21 @@ const JunkCleaner = () => {
         { name: 'Temp Files', size: '1.1 GB', icon: RefreshCw },
         { name: 'Ad Junk', size: '140 MB', icon: AlertTriangle },
       ]);
+      try {
+        await Haptics.notification({ type: 'SUCCESS' as any });
+      } catch (e) {}
     }, 3000);
+  };
+
+  const handleClean = async () => {
+    try {
+      await Haptics.impact({ style: ImpactStyle.Heavy });
+    } catch (e) {}
+    setJunkFound(0);
+    setCategories(prev => prev.map(cat => ({ ...cat, size: '0 MB' })));
+    try {
+      await Haptics.notification({ type: 'SUCCESS' as any });
+    } catch (e) {}
   };
 
   return (
@@ -338,7 +388,7 @@ const JunkCleaner = () => {
         </div>
 
         <h2 className="text-2xl font-display font-bold mb-2">
-          {isScanning ? "Scanning for Junk..." : junkFound ? `${junkFound} GB Junk Found` : "Ready to Clean"}
+          {isScanning ? "Scanning for Junk..." : junkFound ? `${junkFound} GB Junk Found` : junkFound === 0 ? "Device Cleaned!" : "Ready to Clean"}
         </h2>
         <p className="text-white/40 text-sm max-w-[240px]">
           Remove cache, temporary files and system logs to free up space.
@@ -346,7 +396,7 @@ const JunkCleaner = () => {
       </div>
 
       <button 
-        onClick={junkFound ? () => setJunkFound(0) : handleScan}
+        onClick={junkFound ? handleClean : handleScan}
         className="w-full py-4 rounded-2xl bg-neon-cyan text-bg-deep font-display font-bold text-lg tracking-widest uppercase neon-glow-cyan"
       >
         {junkFound ? "Clean Now" : "Start Scan"}
@@ -387,11 +437,18 @@ const RAMBooster = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const handleBoost = () => {
+  const handleBoost = async () => {
     setIsBoosting(true);
-    setTimeout(() => {
+    try {
+      await Haptics.impact({ style: ImpactStyle.Medium });
+    } catch (e) {}
+    
+    setTimeout(async () => {
       setIsBoosting(false);
       setFreed(Math.floor(Math.random() * 200) + 300);
+      try {
+        await Haptics.notification({ type: 'SUCCESS' as any });
+      } catch (e) {}
     }, 2000);
   };
 
@@ -459,14 +516,21 @@ const NetworkSpeed = () => {
   const [speed, setSpeed] = useState<number | null>(null);
   const [ping, setPing] = useState<number | null>(null);
 
-  const startTest = () => {
+  const startTest = async () => {
     setIsTesting(true);
     setSpeed(null);
     setPing(null);
-    setTimeout(() => {
+    try {
+      await Haptics.impact({ style: ImpactStyle.Light });
+    } catch (e) {}
+    
+    setTimeout(async () => {
       setPing(Math.floor(Math.random() * 20) + 10);
       setSpeed(Math.floor(Math.random() * 50) + 40);
       setIsTesting(false);
+      try {
+        await Haptics.notification({ type: 'SUCCESS' as any });
+      } catch (e) {}
     }, 3000);
   };
 
@@ -535,12 +599,19 @@ const SecurityScan = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [status, setStatus] = useState<'idle' | 'scanning' | 'safe'>('idle');
 
-  const handleScan = () => {
+  const handleScan = async () => {
     setIsScanning(true);
     setStatus('scanning');
-    setTimeout(() => {
+    try {
+      await Haptics.impact({ style: ImpactStyle.Medium });
+    } catch (e) {}
+    
+    setTimeout(async () => {
       setIsScanning(false);
       setStatus('safe');
+      try {
+        await Haptics.notification({ type: 'SUCCESS' as any });
+      } catch (e) {}
     }, 4000);
   };
 
@@ -630,6 +701,47 @@ const SecurityScan = () => {
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [viewStack, setViewStack] = useState<Tab[]>(['dashboard']);
+  const [battery, setBattery] = useState<BatteryStatus | null>(null);
+  const [cpuUsage, setCpuUsage] = useState(0);
+
+  useEffect(() => {
+    const fetchBattery = async () => {
+      try {
+        const info = await Device.getBatteryInfo();
+        setBattery({
+          level: Math.round((info.batteryLevel || 0) * 100),
+          charging: info.isCharging || false
+        });
+      } catch (e) {
+        if ('getBattery' in navigator) {
+          (navigator as any).getBattery().then((batt: any) => {
+            const update = () => {
+              setBattery({
+                level: Math.round(batt.level * 100),
+                charging: batt.charging
+              });
+            };
+            update();
+            batt.addEventListener('levelchange', update);
+            batt.addEventListener('chargingchange', update);
+          });
+        }
+      }
+    };
+    fetchBattery();
+    const batteryInterval = setInterval(fetchBattery, 10000);
+
+    const updateCpu = () => {
+      setCpuUsage(Math.floor(Math.random() * 15) + 10);
+    };
+    updateCpu();
+    const cpuInterval = setInterval(updateCpu, 3000);
+
+    return () => {
+      clearInterval(batteryInterval);
+      clearInterval(cpuInterval);
+    };
+  }, []);
 
   const navigateTo = (tab: Tab) => {
     setActiveTab(tab);
@@ -727,9 +839,22 @@ export default function App() {
       );
       case 'battery': return (
         <div className="px-6 flex flex-col items-center justify-center py-20 text-center pb-24">
-          <BatteryIcon size={80} className="text-neon-green mb-6" />
-          <h2 className="text-3xl font-display font-black mb-2">78%</h2>
-          <p className="text-white/40 uppercase tracking-widest text-xs mb-8">Battery Health: Good</p>
+          <div className="relative mb-6">
+            <BatteryIcon size={80} className={cn(battery?.charging ? "text-neon-cyan" : "text-neon-green")} />
+            {battery?.charging && (
+              <motion.div 
+                className="absolute -right-4 top-0 text-neon-cyan"
+                animate={{ scale: [1, 1.2, 1] }}
+                transition={{ duration: 1, repeat: Infinity }}
+              >
+                <Zap size={24} fill="currentColor" />
+              </motion.div>
+            )}
+          </div>
+          <h2 className="text-3xl font-display font-black mb-2">{battery ? `${battery.level}%` : '--%'}</h2>
+          <p className="text-white/40 uppercase tracking-widest text-xs mb-8">
+            {battery?.charging ? "Charging" : "Battery Health: Good"}
+          </p>
           <div className="grid grid-cols-1 w-full gap-4">
             <Card className="flex items-center justify-between">
               <span className="font-display font-bold">Ultra Saving Mode</span>
@@ -749,7 +874,7 @@ export default function App() {
       case 'cooler': return (
         <div className="px-6 flex flex-col items-center justify-center py-20 text-center pb-24">
           <Thermometer size={80} className="text-neon-orange mb-6" />
-          <h2 className="text-3xl font-display font-black mb-2">38°C</h2>
+          <h2 className="text-3xl font-display font-black mb-2">{cpuUsage + 20}°C</h2>
           <p className="text-white/40 uppercase tracking-widest text-xs mb-8">CPU Status: Normal</p>
           <button className="w-full py-4 rounded-2xl bg-neon-orange text-white font-display font-bold text-lg tracking-widest uppercase neon-glow-orange">
             Cool Down
